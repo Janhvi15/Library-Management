@@ -1,0 +1,666 @@
+import sqlite3
+import tkinter as tk
+from tkinter import messagebox, ttk
+from datetime import datetime, timedelta
+import re
+
+# Database Setup
+def init_db():
+    conn = sqlite3.connect('library.db')
+    c = conn.cursor()
+    # Users table
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+                 user_id TEXT PRIMARY KEY,
+                 password TEXT,
+                 is_admin INTEGER)''')
+    # Books table
+    c.execute('''CREATE TABLE IF NOT EXISTS books (
+                 serial_no TEXT PRIMARY KEY,
+                 name TEXT,
+                 author TEXT,
+                 category TEXT,
+                 status TEXT,
+                 cost REAL,
+                 procurement_date TEXT)''')
+    # Memberships table
+    c.execute('''CREATE TABLE IF NOT EXISTS memberships (
+                 membership_id TEXT PRIMARY KEY,
+                 name TEXT,
+                 contact_number TEXT,
+                 address TEXT,
+                 aadhar TEXT,
+                 start_date TEXT,
+                 end_date TEXT,
+                 status TEXT,
+                 fine_pending REAL)''')
+    # Issues table
+    c.execute('''CREATE TABLE IF NOT EXISTS issues (
+                 serial_no TEXT,
+                 book_name TEXT,
+                 membership_id TEXT,
+                 issue_date TEXT,
+                 return_date TEXT,
+                 actual_return_date TEXT,
+                 fine REAL,
+                 fine_paid INTEGER,
+                 FOREIGN KEY(serial_no) REFERENCES books(serial_no),
+                 FOREIGN KEY(membership_id) REFERENCES memberships(membership_id))''')
+    # Insert default users
+    c.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?)", ('adm', 'adm', 1))
+    c.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?)", ('user', 'user', 0))
+    # Insert sample book
+    c.execute("INSERT OR IGNORE INTO books VALUES (?, ?, ?, ?, ?, ?, ?)",
+              ('SCB000001', 'Physics 101', 'John Doe', 'Science', 'Available', 50.0, '2023-01-01'))
+    # Insert sample membership
+    c.execute("INSERT OR IGNORE INTO memberships VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              ('M001', 'Alice Smith', '1234567890', '123 Main St', '123456789012', '2025-01-01', '2025-07-01', 'Active', 0.0))
+    conn.commit()
+    conn.close()
+
+# Utility Functions
+def validate_date(date_str):
+    try:
+        datetime.strptime(date_str, '%Y-%m-%d')
+        return True
+    except ValueError:
+        return False
+
+def calculate_fine(issue_date, return_date, actual_return_date):
+    issue = datetime.strptime(issue_date, '%Y-%m-%d')
+    expected = datetime.strptime(return_date, '%Y-%m-%d')
+    actual = datetime.strptime(actual_return_date, '%Y-%m-%d')
+    if actual > expected:
+        days_late = (actual - expected).days
+        return days_late * 1.0  # $1 per day late
+    return 0.0
+
+# Main Application Class
+class LibraryApp:
+    def _init_(self, root):
+        self.root = root
+        self.root.title("Library Management System")
+        self.root.geometry("800x600")
+        self.current_user = None
+        self.is_admin = False
+        init_db()
+        self.show_login()
+
+    def clear_frame(self):
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+    # Login Screen
+    def show_login(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Library Management System", font=("Arial", 20)).pack(pady=20)
+        tk.Label(self.root, text="User ID").pack()
+        user_id_entry = tk.Entry(self.root)
+        user_id_entry.pack()
+        tk.Label(self.root, text="Password").pack()
+        password_entry = tk.Entry(self.root, show="*")
+        password_entry.pack()
+        tk.Button(self.root, text="Login", command=lambda: self.validate_login(user_id_entry.get(), password_entry.get())).pack(pady=20)
+
+    def validate_login(self, user_id, password):
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        c.execute("SELECT * FROM users WHERE user_id = ? AND password = ?", (user_id, password))
+        user = c.fetchone()
+        conn.close()
+        if user:
+            self.current_user = user_id
+            self.is_admin = bool(user[2])
+            if self.is_admin:
+                self.show_admin_home()
+            else:
+                self.show_user_home()
+        else:
+            messagebox.showerror("Error", "Invalid credentials")
+
+    # Admin Home Page
+    def show_admin_home(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Admin Home Page", font=("Arial", 16)).pack(pady=20)
+        tk.Button(self.root, text="Maintenance", command=self.show_maintenance).pack(pady=10)
+        tk.Button(self.root, text="Reports", command=self.show_reports).pack(pady=10)
+        tk.Button(self.root, text="Transactions", command=self.show_transactions).pack(pady=10)
+        tk.Button(self.root, text="Log Out", command=self.show_login).pack(pady=10)
+
+    # User Home Page
+    def show_user_home(self):
+        self.clear_frame()
+        tk.Label(self.root, text="User Home Page", font=("Arial", 16)).pack(pady=20)
+        tk.Button(self.root, text="Reports", command=self.show_reports).pack(pady=10)
+        tk.Button(self.root, text="Transactions", command=self.show_transactions).pack(pady=10)
+        tk.Button(self.root, text="Log Out", command=self.show_login).pack(pady=10)
+
+    # Maintenance Menu
+    def show_maintenance(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Maintenance", font=("Arial", 16)).pack(pady=20)
+        tk.Button(self.root, text="Add Book", command=self.show_add_book).pack(pady=10)
+        tk.Button(self.root, text="Add Membership", command=self.show_add_membership).pack(pady=10)
+        tk.Button(self.root, text="User Management", command=self.show_user_management).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_admin_home).pack(pady=10)
+
+    # Transactions Menu
+    def show_transactions(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Transactions", font=("Arial", 16)).pack(pady=20)
+        tk.Button(self.root, text="Is Book Available?", command=self.show_book_availability).pack(pady=10)
+        tk.Button(self.root, text="Issue Book", command=self.show_issue_book).pack(pady=10)
+        tk.Button(self.root, text="Return Book", command=self.show_return_book).pack(pady=10)
+        tk.Button(self.root, text="Pay Fine", command=self.show_pay_fine).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_admin_home if self.is_admin else self.show_user_home).pack(pady=10)
+
+    # Reports Menu
+    def show_reports(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Reports", font=("Arial", 16)).pack(pady=20)
+        tk.Button(self.root, text="Master List of Books", command=self.show_book_list).pack(pady=10)
+        tk.Button(self.root, text="Active Issues", command=self.show_active_issues).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_admin_home if self.is_admin else self.show_user_home).pack(pady=10)
+
+    # Book Availability
+    def show_book_availability(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Book Availability", font=("Arial", 16)).pack(pady=20)
+        tk.Label(self.root, text="Enter Book Name").pack()
+        book_name_entry = tk.Entry(self.root)
+        book_name_entry.pack()
+        tk.Button(self.root, text="Search", command=lambda: self.display_books(book_name_entry.get())).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_transactions).pack(pady=10)
+
+    def display_books(self, book_name):
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        query = "SELECT serial_no, name, author, status FROM books WHERE name LIKE ?"
+        c.execute(query, ('%' + book_name + '%',))
+        books = c.fetchall()
+        conn.close()
+        if not books:
+            messagebox.showinfo("Result", "No books found")
+            return
+        result_frame = tk.Frame(self.root)
+        result_frame.pack(pady=10)
+        tree = ttk.Treeview(result_frame, columns=('Serial', 'Name', 'Author', 'Status', 'Select'), show='headings')
+        tree.heading('Serial', text='Serial No')
+        tree.heading('Name', text='Book Name')
+        tree.heading('Author', text='Author')
+        tree.heading('Status', text='Status')
+        tree.heading('Select', text='Select')
+        for book in books:
+            tree.insert('', 'end', values=(book[0], book[1], book[2], book[3], ''))
+        tree.pack()
+        tk.Button(result_frame, text="Issue Selected", command=lambda: self.issue_selected_book(tree)).pack(pady=10)
+
+    def issue_selected_book(self, tree):
+        selected = tree.selection()
+        if not selected:
+            messagebox.showerror("Error", "Please select a book")
+            return
+        serial_no = tree.item(selected[0])['values'][0]
+        if tree.item(selected[0])['values'][3] != 'Available':
+            messagebox.showerror("Error", "Book is not available")
+            return
+        self.show_issue_book(serial_no)
+
+    # Issue Book
+    def show_issue_book(self, serial_no=None):
+        self.clear_frame()
+        tk.Label(self.root, text="Issue Book", font=("Arial", 16)).pack(pady=20)
+        tk.Label(self.root, text="Book Name").pack()
+        book_name_var = tk.StringVar()
+        book_name = ttk.Combobox(self.root, textvariable=book_name_var)
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        c.execute("SELECT name FROM books WHERE status = 'Available'")
+        books = [row[0] for row in c.fetchall()]
+        book_name['values'] = books
+        book_name.pack()
+        tk.Label(self.root, text="Author").pack()
+        author_entry = tk.Entry(self.root, state='readonly')
+        author_entry.pack()
+        tk.Label(self.root, text="Membership ID").pack()
+        membership_id_entry = tk.Entry(self.root)
+        membership_id_entry.pack()
+        tk.Label(self.root, text="Issue Date").pack()
+        issue_date_entry = tk.Entry(self.root)
+        issue_date_entry.insert(0, datetime.now().strftime('%Y-%m-%d'))
+        issue_date_entry.pack()
+        tk.Label(self.root, text="Return Date").pack()
+        return_date_entry = tk.Entry(self.root)
+        return_date_entry.insert(0, (datetime.now() + timedelta(days=15)).strftime('%Y-%m-%d'))
+        return_date_entry.pack()
+        tk.Label(self.root, text="Remarks").pack()
+        remarks_entry = tk.Entry(self.root)
+        remarks_entry.pack()
+
+        def update_author(event):
+            selected_book = book_name_var.get()
+            c.execute("SELECT author FROM books WHERE name = ?", (selected_book,))
+            author = c.fetchone()
+            author_entry.config(state='normal')
+            author_entry.delete(0, tk.END)
+            author_entry.insert(0, author[0] if author else '')
+            author_entry.config(state='readonly')
+
+        book_name.bind('<<ComboboxSelected>>', update_author)
+        tk.Button(self.root, text="Issue", command=lambda: self.process_issue(
+            book_name_var.get(), membership_id_entry.get(), issue_date_entry.get(),
+            return_date_entry.get(), remarks_entry.get())).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_transactions).pack(pady=10)
+        conn.close()
+
+    def process_issue(self, book_name, membership_id, issue_date, return_date, remarks):
+        if not book_name or not membership_id or not issue_date or not return_date:
+            messagebox.showerror("Error", "All fields except remarks are mandatory")
+            return
+        if not validate_date(issue_date) or not validate_date(return_date):
+            messagebox.showerror("Error", "Invalid date format (use YYYY-MM-DD)")
+            return
+        issue_dt = datetime.strptime(issue_date, '%Y-%m-%d')
+        return_dt = datetime.strptime(return_date, '%Y-%m-%d')
+        today = datetime.now()
+        if issue_dt.date() < today.date():
+            messagebox.showerror("Error", "Issue date cannot be in the past")
+            return
+        if (return_dt - issue_dt).days > 15:
+            messagebox.showerror("Error", "Return date cannot be more than 15 days from issue date")
+            return
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        c.execute("SELECT serial_no FROM books WHERE name = ? AND status = 'Available'", (book_name,))
+        book = c.fetchone()
+        c.execute("SELECT membership_id FROM memberships WHERE membership_id = ? AND status = 'Active'", (membership_id,))
+        member = c.fetchone()
+        if not book or not member:
+            messagebox.showerror("Error", "Invalid book or membership")
+            conn.close()
+            return
+        c.execute("INSERT INTO issues (serial_no, book_name, membership_id, issue_date, return_date, fine, fine_paid) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                  (book[0], book_name, membership_id, issue_date, return_date, 0.0, 0))
+        c.execute("UPDATE books SET status = 'Issued' WHERE serial_no = ?", (book[0],))
+        conn.commit()
+        conn.close()
+        messagebox.showinfo("Success", "Book issued successfully")
+        self.show_transactions()
+
+    # Return Book
+    def show_return_book(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Return Book", font=("Arial", 16)).pack(pady=20)
+        tk.Label(self.root, text="Serial No").pack()
+        serial_no_var = tk.StringVar()
+        serial_no = ttk.Combobox(self.root, textvariable=serial_no_var)
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        c.execute("SELECT serial_no FROM books WHERE status = 'Issued'")
+        serials = [row[0] for row in c.fetchall()]
+        serial_no['values'] = serials
+        serial_no.pack()
+        tk.Label(self.root, text="Book Name").pack()
+        book_name_entry = tk.Entry(self.root, state='readonly')
+        book_name_entry.pack()
+        tk.Label(self.root, text="Author").pack()
+        author_entry = tk.Entry(self.root, state='readonly')
+        author_entry.pack()
+        tk.Label(self.root, text="Issue Date").pack()
+        issue_date_entry = tk.Entry(self.root, state='readonly')
+        issue_date_entry.pack()
+        tk.Label(self.root, text="Return Date").pack()
+        return_date_entry = tk.Entry(self.root)
+        return_date_entry.pack()
+        tk.Label(self.root, text="Remarks").pack()
+        remarks_entry = tk.Entry(self.root)
+        remarks_entry.pack()
+
+        def update_fields(event):
+            selected_serial = serial_no_var.get()
+            c.execute("SELECT name, author FROM books WHERE serial_no = ?", (selected_serial,))
+            book = c.fetchone()
+            c.execute("SELECT issue_date, return_date FROM issues WHERE serial_no = ? AND actual_return_date IS NULL", (selected_serial,))
+            issue = c.fetchone()
+            book_name_entry.config(state='normal')
+            book_name_entry.delete(0, tk.END)
+            book_name_entry.insert(0, book[0] if book else '')
+            book_name_entry.config(state='readonly')
+            author_entry.config(state='normal')
+            author_entry.delete(0, tk.END)
+            author_entry.insert(0, book[1] if book else '')
+            author_entry.config(state='readonly')
+            issue_date_entry.config(state='normal')
+            issue_date_entry.delete(0, tk.END)
+            issue_date_entry.insert(0, issue[0] if issue else '')
+            issue_date_entry.config(state='readonly')
+            return_date_entry.delete(0, tk.END)
+            return_date_entry.insert(0, issue[1] if issue else '')
+
+        serial_no.bind('<<ComboboxSelected>>', update_fields)
+        tk.Button(self.root, text="Return", command=lambda: self.process_return(
+            serial_no_var.get(), return_date_entry.get(), remarks_entry.get())).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_transactions).pack(pady=10)
+        conn.close()
+
+    def process_return(self, serial_no, return_date, remarks):
+        if not serial_no or not return_date:
+            messagebox.showerror("Error", "Serial number and return date are mandatory")
+            return
+        if not validate_date(return_date):
+            messagebox.showerror("Error", "Invalid date format (use YYYY-MM-DD)")
+            return
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        c.execute("SELECT issue_date, return_date FROM issues WHERE serial_no = ? AND actual_return_date IS NULL", (serial_no,))
+        issue = c.fetchone()
+        if not issue:
+            messagebox.showerror("Error", "No active issue found for this book")
+            conn.close()
+            return
+        fine = calculate_fine(issue[0], issue[1], return_date)
+        c.execute("UPDATE issues SET actual_return_date = ?, fine = ?, fine_paid = ? WHERE serial_no = ? AND actual_return_date IS NULL",
+                  (return_date, fine, 0, serial_no))
+        c.execute("UPDATE books SET status = 'Available' WHERE serial_no = ?", (serial_no,))
+        conn.commit()
+        conn.close()
+        if fine > 0:
+            messagebox.showinfo("Info", f"Book returned. Fine of ${fine} pending.")
+            self.show_pay_fine(serial_no)
+        else:
+            messagebox.showinfo("Success", "Book returned successfully")
+            self.show_transactions()
+
+    # Pay Fine
+    def show_pay_fine(self, serial_no=None):
+        self.clear_frame()
+        tk.Label(self.root, text="Pay Fine", font=("Arial", 16)).pack(pady=20)
+        tk.Label(self.root, text="Serial No").pack()
+        serial_no_var = tk.StringVar()
+        serial_no_entry = ttk.Combobox(self.root, textvariable=serial_no_var)
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        c.execute("SELECT serial_no FROM issues WHERE fine > 0 AND fine_paid = 0")
+        serials = [row[0] for row in c.fetchall()]
+        serial_no_entry['values'] = serials
+        serial_no_entry.pack()
+        tk.Label(self.root, text="Book Name").pack()
+        book_name_entry = tk.Entry(self.root, state='readonly')
+        book_name_entry.pack()
+        tk.Label(self.root, text="Fine Calculated").pack()
+        fine_entry = tk.Entry(self.root, state='readonly')
+        fine_entry.pack()
+        tk.Label(self.root, text="Fine Paid").pack()
+        fine_paid_var = tk.BooleanVar()
+        tk.Checkbutton(self.root, variable=fine_paid_var).pack()
+        tk.Label(self.root, text="Remarks").pack()
+        remarks_entry = tk.Entry(self.root)
+        remarks_entry.pack()
+
+        def update_fine_fields(event):
+            selected_serial = serial_no_var.get()
+            c.execute("SELECT book_name, fine FROM issues WHERE serial_no = ? AND fine_paid = 0", (selected_serial,))
+            issue = c.fetchone()
+            book_name_entry.config(state='normal')
+            book_name_entry.delete(0, tk.END)
+            book_name_entry.insert(0, issue[0] if issue else '')
+            book_name_entry.config(state='readonly')
+            fine_entry.config(state='normal')
+            fine_entry.delete(0, tk.END)
+            fine_entry.insert(0, str(issue[1]) if issue else '0.0')
+            fine_entry.config(state='readonly')
+
+        serial_no_entry.bind('<<ComboboxSelected>>', update_fine_fields)
+        tk.Button(self.root, text="Confirm", command=lambda: self.process_fine_payment(
+            serial_no_var.get(), fine_paid_var.get(), remarks_entry.get())).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_transactions).pack(pady=10)
+        if serial_no:
+            serial_no_var.set(serial_no)
+            update_fine_fields(None)
+        conn.close()
+
+    def process_fine_payment(self, serial_no, fine_paid, remarks):
+        if not serial_no:
+            messagebox.showerror("Error", "Please select a book")
+            return
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        c.execute("SELECT fine FROM issues WHERE serial_no = ? AND fine_paid = 0", (serial_no,))
+        fine = c.fetchone()
+        if not fine:
+            messagebox.showerror("Error", "No pending fine for this book")
+            conn.close()
+            return
+        if fine[0] > 0 and not fine_paid:
+            messagebox.showerror("Error", "Please check 'Fine Paid' to proceed")
+            conn.close()
+            return
+        c.execute("UPDATE issues SET fine_paid = ? WHERE serial_no = ?", (1 if fine_paid else 0, serial_no))
+        if fine_paid:
+            c.execute("UPDATE memberships SET fine_pending = fine_pending - ? WHERE membership_id = (SELECT membership_id FROM issues WHERE serial_no = ?)",
+                      (fine[0], serial_no))
+        conn.commit()
+        conn.close()
+        messagebox.showinfo("Success", "Fine payment processed")
+        self.show_transactions()
+
+    # Add Book
+    def show_add_book(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Add Book", font=("Arial", 16)).pack(pady=20)
+        tk.Label(self.root, text="Book or Movie").pack()
+        type_var = tk.StringVar(value="Book")
+        tk.Radiobutton(self.root, text="Book", variable=type_var, value="Book").pack()
+        tk.Radiobutton(self.root, text="Movie", variable=type_var, value="Movie").pack()
+        tk.Label(self.root, text="Serial No").pack()
+        serial_no_entry = tk.Entry(self.root)
+        serial_no_entry.pack()
+        tk.Label(self.root, text="Name").pack()
+        name_entry = tk.Entry(self.root)
+        name_entry.pack()
+        tk.Label(self.root, text="Author").pack()
+        author_entry = tk.Entry(self.root)
+        author_entry.pack()
+        tk.Label(self.root, text="Category").pack()
+        category_entry = tk.Entry(self.root)
+        category_entry.pack()
+        tk.Label(self.root, text="Cost").pack()
+        cost_entry = tk.Entry(self.root)
+        cost_entry.pack()
+        tk.Label(self.root, text="Procurement Date (YYYY-MM-DD)").pack()
+        proc_date_entry = tk.Entry(self.root)
+        proc_date_entry.pack()
+        tk.Button(self.root, text="Add", command=lambda: self.process_add_book(
+            type_var.get(), serial_no_entry.get(), name_entry.get(), author_entry.get(),
+            category_entry.get(), cost_entry.get(), proc_date_entry.get())).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_maintenance).pack(pady=10)
+
+    def process_add_book(self, type_, serial_no, name, author, category, cost, proc_date):
+        if not all([serial_no, name, author, category, cost, proc_date]):
+            messagebox.showerror("Error", "All fields are mandatory")
+            return
+        try:
+            cost = float(cost)
+        except ValueError:
+            messagebox.showerror("Error", "Invalid cost")
+            return
+        if not validate_date(proc_date):
+            messagebox.showerror("Error", "Invalid date format (use YYYY-MM-DD)")
+            return
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        try:
+            c.execute("INSERT INTO books (serial_no, name, author, category, status, cost, procurement_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                      (serial_no, name, author, category, 'Available', cost, proc_date))
+            conn.commit()
+            messagebox.showinfo("Success", f"{type_} added successfully")
+            self.show_maintenance()
+        except sqlite3.IntegrityError:
+            messagebox.showerror("Error", "Serial number already exists")
+        finally:
+            conn.close()
+
+    # Add Membership
+    def show_add_membership(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Add Membership", font=("Arial", 16)).pack(pady=20)
+        tk.Label(self.root, text="Membership ID").pack()
+        membership_id_entry = tk.Entry(self.root)
+        membership_id_entry.pack()
+        tk.Label(self.root, text="Name").pack()
+        name_entry = tk.Entry(self.root)
+        name_entry.pack()
+        tk.Label(self.root, text="Contact Number").pack()
+        contact_entry = tk.Entry(self.root)
+        contact_entry.pack()
+        tk.Label(self.root, text="Address").pack()
+        address_entry = tk.Entry(self.root)
+        address_entry.pack()
+        tk.Label(self.root, text="Aadhar Number").pack()
+        aadhar_entry = tk.Entry(self.root)
+        aadhar_entry.pack()
+        tk.Label(self.root, text="Start Date (YYYY-MM-DD)").pack()
+        start_date_entry = tk.Entry(self.root)
+        start_date_entry.insert(0, datetime.now().strftime('%Y-%m-%d'))
+        start_date_entry.pack()
+        tk.Label(self.root, text="Membership Duration").pack()
+        duration_var = tk.StringVar(value="6 months")
+        tk.Radiobutton(self.root, text="6 months", variable=duration_var, value="6 months").pack()
+        tk.Radiobutton(self.root, text="1 year", variable=duration_var, value="1 year").pack()
+        tk.Radiobutton(self.root, text="2 years", variable=duration_var, value="2 years").pack()
+        tk.Button(self.root, text="Add", command=lambda: self.process_add_membership(
+            membership_id_entry.get(), name_entry.get(), contact_entry.get(),
+            address_entry.get(), aadhar_entry.get(), start_date_entry.get(), duration_var.get())).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_maintenance).pack(pady=10)
+
+    def process_add_membership(self, membership_id, name, contact, address, aadhar, start_date, duration):
+        if not all([membership_id, name, contact, address, aadhar, start_date]):
+            messagebox.showerror("Error", "All fields are mandatory")
+            return
+        if not validate_date(start_date):
+            messagebox.showerror("Error", "Invalid date format (use YYYY-MM-DD)")
+            return
+        if not re.match(r'^\d{12}$', aadhar):
+            messagebox.showerror("Error", "Invalid Aadhar number")
+            return
+        if not re.match(r'^\d{10}$', contact):
+            messagebox.showerror("Error", "Invalid contact number")
+            return
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        if duration == "6 months":
+            end_dt = start_dt + timedelta(days=180)
+        elif duration == "1 year":
+            end_dt = start_dt + timedelta(days=365)
+        else:
+            end_dt = start_dt + timedelta(days=730)
+        end_date = end_dt.strftime('%Y-%m-%d')
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        try:
+            c.execute("INSERT INTO memberships (membership_id, name, contact_number, address, aadhar, start_date, end_date, status, fine_pending) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                      (membership_id, name, contact, address, aadhar, start_date, end_date, 'Active', 0.0))
+            conn.commit()
+            messagebox.showinfo("Success", "Membership added successfully")
+            self.show_maintenance()
+        except sqlite3.IntegrityError:
+            messagebox.showerror("Error", "Membership ID already exists")
+        finally:
+            conn.close()
+
+    # User Management
+    def show_user_management(self):
+        self.clear_frame()
+        tk.Label(self.root, text="User Management", font=("Arial", 16)).pack(pady=20)
+        tk.Label(self.root, text="User Type").pack()
+        user_type_var = tk.StringVar(value="New")
+        tk.Radiobutton(self.root, text="New User", variable=user_type_var, value="New").pack()
+        tk.Radiobutton(self.root, text="Existing User", variable=user_type_var, value="Existing").pack()
+        tk.Label(self.root, text="User ID").pack()
+        user_id_entry = tk.Entry(self.root)
+        user_id_entry.pack()
+        tk.Label(self.root, text="Password").pack()
+        password_entry = tk.Entry(self.root, show="*")
+        password_entry.pack()
+        tk.Label(self.root, text="Status").pack()
+        status_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(self.root, text="Active", variable=status_var).pack()
+        tk.Label(self.root, text="Admin").pack()
+        admin_var = tk.BooleanVar()
+        tk.Checkbutton(self.root, text="Admin", variable=admin_var).pack()
+        tk.Button(self.root, text="Submit", command=lambda: self.process_user_management(
+            user_type_var.get(), user_id_entry.get(), password_entry.get(), status_var.get(), admin_var.get())).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_maintenance).pack(pady=10)
+
+    def process_user_management(self, user_type, user_id, password, status, admin):
+        if not user_id or not password:
+            messagebox.showerror("Error", "User ID and password are mandatory")
+            return
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        if user_type == "New":
+            try:
+                c.execute("INSERT INTO users (user_id, password, is_admin) VALUES (?, ?, ?)",
+                          (user_id, password, 1 if admin else 0))
+                conn.commit()
+                messagebox.showinfo("Success", "User added successfully")
+            except sqlite3.IntegrityError:
+                messagebox.showerror("Error", "User ID already exists")
+        else:
+            c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+            if not c.fetchone():
+                messagebox.showerror("Error", "User ID does not exist")
+                conn.close()
+                return
+            c.execute("UPDATE users SET password = ?, is_admin = ? WHERE user_id = ?",
+                      (password, 1 if admin else 0, user_id))
+            conn.commit()
+            messagebox.showinfo("Success", "User updated successfully")
+        conn.close()
+        self.show_maintenance()
+
+    # Master List of Books
+    def show_book_list(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Master List of Books", font=("Arial", 16)).pack(pady=20)
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        c.execute("SELECT serial_no, name, author, category, status, cost, procurement_date FROM books")
+        books = c.fetchall()
+        conn.close()
+        tree = ttk.Treeview(self.root, columns=('Serial', 'Name', 'Author', 'Category', 'Status', 'Cost', 'Date'), show='headings')
+        tree.heading('Serial', text='Serial No')
+        tree.heading('Name', text='Book Name')
+        tree.heading('Author', text='Author')
+        tree.heading('Category', text='Category')
+        tree.heading('Status', text='Status')
+        tree.heading('Cost', text='Cost')
+        tree.heading('Date', text='Procurement Date')
+        for book in books:
+            tree.insert('', 'end', values=book)
+        tree.pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_reports).pack(pady=10)
+
+    # Active Issues
+    def show_active_issues(self):
+        self.clear_frame()
+        tk.Label(self.root, text="Active Issues", font=("Arial", 16)).pack(pady=20)
+        conn = sqlite3.connect('library.db')
+        c = conn.cursor()
+        c.execute("SELECT serial_no, book_name, membership_id, issue_date, return_date FROM issues WHERE actual_return_date IS NULL")
+        issues = c.fetchall()
+        conn.close()
+        tree = ttk.Treeview(self.root, columns=('Serial', 'Book', 'Member', 'Issue', 'Return'), show='headings')
+        tree.heading('Serial', text='Serial No')
+        tree.heading('Book', text='Book Name')
+        tree.heading('Member', text='Membership ID')
+        tree.heading('Issue', text='Issue Date')
+        tree.heading('Return', text='Return Date')
+        for issue in issues:
+            tree.insert('', 'end', values=issue)
+        tree.pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_reports).pack(pady=10)
+
+# Run Application
+if _name_ == "_main_":
+    root = tk.Tk()
+    app = LibraryApp(root)
+    root.mainloop()
